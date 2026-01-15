@@ -1,32 +1,14 @@
 const express = require('express');
 const cors = require('cors');
-const helmet = require('helmet');
-const morgan = require('morgan');
-const { connectDB } = require('./config/database.config');
 const webhookRoutes = require('./routes/webhook.routes');
 const paymentRoutes = require('./routes/payment.routes');
-const { errorHandler, notFoundHandler } = require('./middlewares/error.middleware');
-const logger = require('./utils/logger');
 
 const app = express();
 
-// Connect to database
-connectDB();
-
 // Middleware
-app.use(helmet());
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-
-// Import test routes (only in development)
-if (process.env.NODE_ENV === 'development') {
-  const testRoutes = require('./routes/test.routes');
-  app.use('/test', testRoutes);
-}
-
-// Logging
-app.use(morgan('combined', { stream: { write: message => logger.info(message.trim()) } }));
 
 // Routes
 app.use('/webhook', webhookRoutes);
@@ -34,15 +16,52 @@ app.use('/payment', paymentRoutes);
 
 // Health check
 app.get('/health', (req, res) => {
-  res.status(200).json({ 
-    status: 'OK', 
+  res.json({
+    status: 'OK',
     timestamp: new Date().toISOString(),
-    service: 'WhatsApp Bot Service'
+    service: 'WhatsApp Bot'
   });
 });
 
-// Error handling
-app.use(notFoundHandler);
-app.use(errorHandler);
+// Test endpoints
+app.get('/test/data', (req, res) => {
+  const db = require('./services/database.service');
+  res.json({
+    users: db.getUsers(),
+    orders: db.getOrders(),
+    stats: db.getStats()
+  });
+});
+
+app.post('/test/clear', (req, res) => {
+  if (process.env.NODE_ENV !== 'development') {
+    return res.status(403).json({ error: 'Only in development' });
+  }
+  
+  const db = require('./services/database.service');
+  db.clearAll();
+  
+  res.json({
+    message: 'Test data cleared',
+    stats: db.getStats()
+  });
+});
+
+// 404 handler
+app.use((req, res) => {
+  res.status(404).json({
+    error: 'Not Found',
+    message: `Cannot ${req.method} ${req.url}`
+  });
+});
+
+// Error handler
+app.use((err, req, res, next) => {
+  console.error('Server error:', err);
+  res.status(500).json({
+    error: 'Internal Server Error',
+    message: err.message
+  });
+});
 
 module.exports = app;

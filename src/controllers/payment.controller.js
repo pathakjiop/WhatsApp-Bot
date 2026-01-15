@@ -1,180 +1,136 @@
-const WhatsAppService = require('../services/whatsapp.service');
-const PaymentService = require('../services/payment.service');
-const NotificationService = require('../services/notification.service');
-const Order = require('../models/order.model');
-const { generateOrderId } = require('../utils/helpers');
-const logger = require('../utils/logger');
+const database = require('../services/database.service');
+const notificationService = require('../services/notification.service');
+const paymentService = require('../services/payment.service');
 
 class PaymentController {
-  async initiatePayment(from, order) {
+  async handleSuccess(req, res) {
     try {
-      // Create Razorpay order
-      const razorpayOrder = await PaymentService.createOrder(
-        order.amount,
-        order.orderId,
-        {
-          whatsappId: order.whatsappId,
-          serviceType: order.serviceType,
+      const { order_id, payment_id, signature, mock, amount, service } = req.query;
+      
+      console.log('💰 Payment success callback:', req.query);
+      
+      if (mock === 'true') {
+        // Mock payment for testing
+        const order = await database.findOrderByOrderId(order_id);
+        
+        if (order) {
+          // Update order status
+          await database.updateOrder(order_id, {
+            status: 'completed',
+            paymentStatus: 'captured',
+            paymentId: payment_id || `mock_${Date.now()}`,
+            completedAt: new Date().toISOString()
+          });
+          
+          // Send confirmation
+          await notificationService.sendPaymentConfirmation(order.whatsappId, {
+            orderId: order.orderId,
+            service: order.service,
+            amount: order.amount
+          });
         }
-      );
-
-      if (!razorpayOrder.success) {
-        throw new Error('Failed to create payment order');
+        
+        return res.send(`
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <title>Payment Successful</title>
+            <style>
+              body { font-family: Arial, sans-serif; text-align: center; padding: 50px; }
+              .success { color: green; font-size: 24px; }
+              .message { margin: 20px 0; }
+            </style>
+          </head>
+          <body>
+            <div class="success">✅ Payment Successful!</div>
+            <div class="message">Order ID: ${order_id}</div>
+            <div class="message">Amount: ₹${amount || '100'}</div>
+            <div class="message">Service: ${service || 'Land Record'}</div>
+            <div class="message">You will receive confirmation on WhatsApp.</div>
+            <div class="message">You can close this window.</div>
+          </body>
+          </html>
+        `);
       }
-
-      // Update order with Razorpay order ID
-      order.razorpayOrderId = razorpayOrder.orderId;
-      await order.save();
-
-      // Generate payment link
-      const userData = order.userData || {};
-      const paymentLink = await PaymentService.generatePaymentLink(
-        order.orderId,
-        order.amount,
-        userData.name || 'Customer',
-        userData.email || '',
-        from
-      );
-
-      if (!paymentLink.success) {
-        throw new Error('Failed to generate payment link');
-      }
-
-      // Send payment link to user
-      await this.sendPaymentMessage(from, order, paymentLink.paymentLink);
       
-      logger.info('Payment initiated', {
-        orderId: order.orderId,
-        razorpayOrderId: razorpayOrder.orderId,
-        amount: order.amount,
-      });
-
-      return {
-        success: true,
-        paymentLink: paymentLink.paymentLink,
-        orderId: order.orderId,
-      };
+      // Real payment verification (not implemented in this version)
+      const verification = await paymentService.verifyPayment(order_id, payment_id, signature);
+      
+      if (verification.success) {
+        const order = await database.findOrderByOrderId(order_id);
+        
+        if (order) {
+          await database.updateOrder(order_id, {
+            status: 'completed',
+            paymentStatus: 'captured',
+            paymentId: payment_id,
+            completedAt: new Date().toISOString()
+          });
+          
+          await notificationService.sendPaymentConfirmation(order.whatsappId, {
+            orderId: order.orderId,
+            service: order.service,
+            amount: order.amount
+          });
+        }
+        
+        return res.send(`
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <title>Payment Successful</title>
+            <style>
+              body { font-family: Arial, sans-serif; text-align: center; padding: 50px; }
+              .success { color: green; font-size: 24px; }
+            </style>
+          </head>
+          <body>
+            <div class="success">✅ Payment Successful!</div>
+            <div class="message">You will receive confirmation on WhatsApp.</div>
+          </body>
+          </html>
+        `);
+      } else {
+        return this.handleFailure(req, res);
+      }
+      
     } catch (error) {
-      logger.error('Error initiating payment:', error);
-      
-      // Notify user of failure
-      await WhatsAppService.sendTextMessage(
-        from,
-        '❌ Failed to create payment. Please try again or contact support.'
-      );
-      
-      return {
-        success: false,
-        error: error.message,
-      };
+      console.error('Payment success error:', error);
+      return this.handleFailure(req, res);
     }
   }
 
-  async sendPaymentMessage(to, order, paymentLink) {
-    const amountInRupees = (order.amount / 100).toFixed(2);
+  async handleFailure(req, res) {
+    const { order_id } = req.query;
     
-    const message = `💰 Payment Required\n\n` +
-      `Service: ${order.serviceType}\n` +
-      `Amount: ₹${amountInRupees}\n` +
-      `Order ID: ${order.orderId}\n\n` +
-      `Please complete your payment using the link below:\n` +
-      `${paymentLink}\n\n` +
-      `⚠️ Note: Your application will be processed only after successful payment.`;
-
-    await WhatsAppService.sendTextMessage(to, message);
-  }
-
-  async handlePaymentSuccess(orderId, paymentId, signature) {
-    try {
-      // Verify payment
-      const verification = await PaymentService.verifyPayment(
-        orderId,
-        paymentId,
-        signature
-      );
-
-      if (!verification.success) {
-        throw new Error('Payment verification failed');
-      }
-
-      // Update order status
-      const order = await Order.findOneAndUpdate(
-        { razorpayOrderId: orderId },
-        {
-          status: 'completed',
-          paymentStatus: 'captured',
-          paymentId,
-          completedAt: new Date(),
-        },
-        { new: true }
-      );
-
-      if (!order) {
-        throw new Error('Order not found');
-      }
-
-      // Send success notifications
-      await NotificationService.sendPaymentSuccessNotification(order.whatsappId, {
-        orderId: order.orderId,
-        serviceType: order.serviceType,
-        amount: order.amount,
+    console.log('❌ Payment failed for order:', order_id);
+    
+    if (order_id) {
+      await database.updateOrder(order_id, {
+        status: 'failed',
+        paymentStatus: 'failed'
       });
-
-      await NotificationService.sendApplicationSubmittedNotification(
-        order.whatsappId,
-        order.serviceType
-      );
-
-      logger.info('Payment handled successfully', {
-        orderId: order.orderId,
-        paymentId,
-        amount: order.amount,
-      });
-
-      return {
-        success: true,
-        order,
-      };
-    } catch (error) {
-      logger.error('Error handling payment success:', error);
-      return {
-        success: false,
-        error: error.message,
-      };
     }
-  }
-
-  async handlePaymentFailure(orderId) {
-    try {
-      const order = await Order.findOneAndUpdate(
-        { razorpayOrderId: orderId },
-        {
-          status: 'failed',
-          paymentStatus: 'failed',
-        },
-        { new: true }
-      );
-
-      if (order) {
-        await NotificationService.sendPaymentFailureNotification(
-          order.whatsappId,
-          order.orderId
-        );
-      }
-
-      logger.info('Payment failure handled', { orderId });
-      
-      return {
-        success: true,
-        order,
-      };
-    } catch (error) {
-      logger.error('Error handling payment failure:', error);
-      return {
-        success: false,
-        error: error.message,
-      };
-    }
+    
+    res.send(`
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>Payment Failed</title>
+        <style>
+          body { font-family: Arial, sans-serif; text-align: center; padding: 50px; }
+          .error { color: red; font-size: 24px; }
+          .message { margin: 20px 0; }
+        </style>
+      </head>
+      <body>
+        <div class="error">❌ Payment Failed</div>
+        <div class="message">Your payment could not be processed.</div>
+        <div class="message">Please try again or contact support.</div>
+        <div class="message">You can close this window.</div>
+      </body>
+      </html>
+    `);
   }
 }
 

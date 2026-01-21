@@ -4,7 +4,7 @@ const { welcomeMessage } = require("../templates/welcome.template")
 const logger = require("../utils/logger")
 
 class MessageController {
-  async handleMessage(from, messageText, messageType = "text") {
+  async handleMessage(from, messageText, messageId = null, messageType = "text") {
     console.log(`\n💬 PROCESSING MESSAGE:`)
     console.log(`From: ${from}`)
     console.log(`Text: ${messageText}`)
@@ -26,6 +26,10 @@ class MessageController {
       // Handle 'hi' or 'hello' - send welcome with service buttons
       if (text === "hi" || text === "hello" || text === "start") {
         console.log("Sending welcome message with service buttons...")
+        // an await where we will be deleting the message
+        if (messageId) {
+          await whatsappService.deleteMessage(messageId)
+        }
         await whatsappService.sendMessage(from, welcomeMessage())
         return
       }

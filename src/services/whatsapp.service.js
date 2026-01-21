@@ -152,6 +152,50 @@ class WhatsAppService {
   isTestMode() {
     return this.testMode;
   }
+
+  async deleteMessage(messageId) {
+    try {
+      console.log(`\n🗑️ DELETING WHATSAPP MESSAGE:`);
+      console.log(`Message ID: ${messageId}`);
+
+      if (!this.hasRealCredentials) {
+        console.log('❌ CANNOT DELETE - Missing real WhatsApp credentials');
+        return {
+          error: 'Missing WhatsApp credentials',
+          test_mode: true,
+          would_delete: messageId
+        };
+      }
+
+      const url = `https://graph.facebook.com/${this.apiVersion}/${messageId}`;
+
+      console.log(`URL: ${url}`);
+
+      const response = await axios.delete(
+        url,
+        {
+          headers: {
+            'Authorization': `Bearer ${this.accessToken}`,
+          },
+          timeout: 10000
+        }
+      );
+
+      console.log('✅ WhatsApp API Response:', JSON.stringify(response.data, null, 2));
+      return response.data;
+
+    } catch (error) {
+      console.error('❌ WhatsApp API Error while deleting:');
+      console.error('Status:', error.response?.status);
+      console.error('Error Data:', JSON.stringify(error.response?.data, null, 2));
+      console.error('Message:', error.message);
+
+      return {
+        error: error.response?.data || error.message,
+        test_fallback: true
+      };
+    }
+  }
 }
 
 module.exports = new WhatsAppService();

@@ -88,7 +88,7 @@ class WebhookController {
       try {
         if (message.type === "text") {
           console.log(`Text: ${message.text.body}`)
-          await messageController.handleMessage(message.from, message.text.body)
+          await messageController.handleMessage(message.from, message.text.body, message.id)
         } else if (message.type === "interactive") {
           const interactive = message.interactive || {}
           const replyId = interactive.button_reply?.id || interactive.list_reply?.id
